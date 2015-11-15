@@ -41,14 +41,14 @@
 
 #define NUM_PRESETS 3
 
-#define CANOPY_FRONT -132
+#define CANOPY_FRONT -122
 #define RPM_FRONT 1675.0
 
-#define CANOPY_MIDDLE -40
-#define RPM_MIDDLE 2175
+#define CANOPY_MIDDLE -20
+#define RPM_MIDDLE 2075  // was 2150
 
-#define CANOPY_BACK -70
-#define RPM_BACK 2425.0
+#define CANOPY_BACK -30
+#define RPM_BACK 2450
 
 #define CHANGE_DELTA 25
 
@@ -80,7 +80,7 @@ int autoload_mode = 0;
 #define AUTOLOAD_STATE_OVERFLOW_REVERSE 1
 #define AUTOLOAD_STATE_OVERFLOW 2
 int autoload_state = AUTOLOAD_STATE_RELOAD;
-#define AUTOLOAD_REVERSE_TIME 400 // reverse time after overlow in ms
+#define AUTOLOAD_REVERSE_TIME 250 // reverse time after overlow in ms
 unsigned int autoload_reverse_timeout;
 
 int debug_canopy_value;
@@ -278,6 +278,7 @@ FwControlUpdateVelocityTbh( fw_controller *fw )
 	// Use Kp as gain
 	fw->drive =  fw->drive + (fw->error * fw->gain);
 
+
 	// Clip - we are only going forwards
 	if( fw->drive > 1 )
 		fw->drive = 1;
@@ -303,21 +304,7 @@ FwControlUpdateVelocityTbh( fw_controller *fw )
 	fw->last_error = fw->error;
 }
 
-/*-----------------------------------------------------------------------------*/
-/** @brief     Task to control the velocity of the flywheel                    */
-/*-----------------------------------------------------------------------------*/
-void assignPresets()
-{
-	// if num is changed, change default in main
-	presets[0][0] = CANOPY_BACK;
-	presets[0][1] = RPM_BACK;
 
-	presets[1][0] = CANOPY_MIDDLE;
-	presets[1][1] = RPM_MIDDLE;
-
-	presets[2][0] = CANOPY_FRONT;
-	presets[2][1] = RPM_FRONT;
-}
 
 task
 FwControlTask()
@@ -325,7 +312,8 @@ FwControlTask()
 	fw_controller *fw = &flywheel;
 
 	// Set the gain
-	fw->gain = 0.00010;
+	// fw->gain = 0.000055;
+	fw->gain = 0.001;
 
 	// We are using Speed geared motors
 	// Set the encoder ticks per revolution
@@ -350,7 +338,7 @@ FwControlTask()
 
 		// Final Limit of motor values - don't really need this
 		if( fw->motor_drive >  127 ) fw->motor_drive =  127;
-		if( fw->motor_drive < -127 ) fw->motor_drive = -127;
+		if( fw->motor_drive < 0 ) fw->motor_drive = 0;
 
 		// and finally set the motor control value
 		FwMotorSet( fw->motor_drive );
@@ -360,9 +348,26 @@ FwControlTask()
 	}
 }
 
+
 int wheelSpeedError(fw_controller *fw)
 {
 	return fw->target - fw->current;
+}
+
+/*-----------------------------------------------------------------------------*/
+/** @brief     Task to control the velocity of the flywheel                    */
+/*-----------------------------------------------------------------------------*/
+void assignPresets()
+{
+	// if num is changed, change default in main
+	presets[0][0] = CANOPY_BACK;
+	presets[0][1] = RPM_BACK;
+
+	presets[1][0] = CANOPY_MIDDLE;
+	presets[1][1] = RPM_MIDDLE;
+
+	presets[2][0] = CANOPY_FRONT;
+	presets[2][1] = RPM_FRONT;
 }
 
 #define TRIGGER_POSITION_MAX 390
@@ -378,7 +383,7 @@ int wheelSpeedError(fw_controller *fw)
 #define TRIGGER_STATE_BLOCKING 4
 
 #define TRIGGER_LOADING_MIN_DIST_FROM_CANOPY 160 // Canopy value + 160 is the load position
-#define TRIGGER_SHOOTING_MIN_DIST_FROM_CANOPY 350 // Canopy value + 320 is the trigger position
+#define TRIGGER_SHOOTING_MIN_DIST_FROM_CANOPY 320 // Canopy value + 320 is the trigger position
 
 #define BLOCKING_MODE_CANOPY_POSITION CANOPY_POSITION_MAX
 #define BLOCKING_MODE_TRIGGER_POSITION 150
@@ -399,6 +404,7 @@ int shoot_request = 0;
 #define RELOAD_WAIT_TIME 500 // how long to wait for ball during reloading before moving to READY state
 
 int trigger_position_desired = 0;
+unsigned int next_auto_shoot_time;
 
 float Trigger_Kp = 1.2;
 float Trigger_Kd = 0.5;
@@ -406,11 +412,11 @@ float Trigger_Ki = 0.1;
 
 void zero_position_set() {
 	motor[Trigger_motor] = -45;
-	motor[Canopy_motor] = +45;
+	motor[Canopy_motor] = +25;
 	wait1Msec(500);
 	motor[Trigger_motor] = 0;
 	motor[Canopy_motor] = 0;
-	wait1Msec(300);
+	wait1Msec(500);
 
 	nMotorEncoder[Trigger_motor] = 0;
 	nMotorEncoder[Canopy_motor] = 0;
@@ -527,10 +533,11 @@ task trigger_management()
 	int shoot_time_out_enabled = 0;
 	unsigned int shoot_cancel_time = 0;
 	int trigger_task_loop_time = 25; // ms
+	int fr1, fr2;
 
 	int current_trigger_state = TRIGGER_STATE_WAITING;
-	unsigned int wait_end_time;
 	unsigned int trigger_timeout_time;
+	unsigned int shooting_run_loader_backwards_timeout_time;
 	int change_in_speed;
 	int current_wheel_speed_error = wheelSpeedError(&flywheel);
 	int previous_wheel_speed_error;
@@ -542,41 +549,71 @@ task trigger_management()
 			change_in_speed = abs(previous_wheel_speed_error - current_wheel_speed_error);
 			previous_wheel_speed_error = current_wheel_speed_error;
 
+			fr1 = 1; // shot failed-to-shoot reason 1
+			fr2 = 1; // shot failed-to-shoot reason 2
 			// Ball is loaded, check to see if shooting requested
-			if ((shoot_request == 1 || auto_shoot_mode == 1) && abs(wheelSpeedError(&flywheel)) <= FLYWHEEL_MAX_RPM_DELTA && change_in_speed <= CHANGE_DELTA) {
-				// Move trigger up to shoot
+			if ((shoot_request == 1 || (auto_shoot_mode == 1 && nSysTime >= next_auto_shoot_time))
+				&& (fr1 = (abs(wheelSpeedError(&flywheel)) <= FLYWHEEL_MAX_RPM_DELTA)) && (fr2 = (change_in_speed <= CHANGE_DELTA))) {
+			   if (auto_shoot_mode) next_auto_shoot_time = nSysTime + 2000;
+
+			// Move trigger up to shoot
+
+
 				current_trigger_state = TRIGGER_STATE_SHOOTING;
 				trigger_timeout_time = nSysTime + TRIGGER_TIMEOUT;
+				shooting_run_loader_backwards_timeout_time = nSysTime + 125;
 				trigger_set_and_check(TRIGGER_REQ_SHOOT);
 				disable_ball_picker = 1;
 				motor[BallPicker] = -127;
 			}
 			else {
 				trigger_set_and_check(TRIGGER_REQ_RELOAD);
+
+				// DEBUG START
+				if (shoot_request) {
+					if (!fr1) {
+						writeDebugStreamLine("Didn't shoot due to RPM; Error: %f", wheelSpeedError(&flywheel));
+				  }
+				  if (!fr2) {
+				  	writeDebugStreamLine("Didn't shoot due to change in speed");
+				  }
+				  if (fr1 && fr2) {
+				  	writeDebugStreamLine("Didn't shoot for unknown reason");
+				  }
+
+
+				}
+				// DEBUG END
 			}
 
 			break;
 		case TRIGGER_STATE_SHOOTING:
 
+		  if (nSysTime > shooting_run_loader_backwards_timeout_time) {
+		  	motor[BallPicker] = 0;
+		  	disable_ball_picker = 0;
+		  }
+
 			if ( trigger_set_and_check(TRIGGER_REQ_SHOOT) || nSysTime > trigger_timeout_time) { // returns 1 if reached desired shooting position
 				if (nSysTime > trigger_timeout_time) {
 					writeDebugStreamLine("Shoot: Timeout");
+					disable_ball_picker = 0;
 				}
 				else {
 					writeDebugStreamLine("Shoot: Success");
 					shoot_request = 0; // Since we have fired the ball, reset this request to 0
+					// DEBUG START
+			    writeDebugStreamLine("RPM: %d", flywheel.v_current);
+			    // DEBUG END
 				}
 				current_trigger_state = TRIGGER_STATE_RELOADING;
 				trigger_set_and_check(TRIGGER_REQ_RELOAD);
 				disable_ball_picker = 0;
-				motor[BallPicker] = 0;
 			}
 			break;
 		case TRIGGER_STATE_RELOADING:
 			if (trigger_set_and_check(TRIGGER_REQ_RELOAD)) { // returns 1 if reached desired reloading position
 				current_trigger_state = TRIGGER_STATE_WAITING;
-				// Start timer
-				wait_end_time = nSysTime + RELOAD_WAIT_TIME;
 			}
 			break;
 		case TRIGGER_STATE_WAITING:
@@ -587,7 +624,7 @@ task trigger_management()
 				current_trigger_state = TRIGGER_STATE_READY;
 				shoot_time_out_enabled = 0;
 			}
-			else if(shoot_request == 1) {
+			else if (shoot_request == 1) {
 				if(shoot_time_out_enabled) {
 					if(nSysTime > shoot_cancel_time) {
 						shoot_request = 0;
@@ -698,19 +735,16 @@ task autonomous()
 	startTask( CanopyTriggerPID );
 	startTask( trigger_management );
 
-	wait1Msec(1500);
+	wait1Msec(1000);
 
-	autoload_mode = 1; // Start Auto Loader
-
-
+  autoload_mode = 1;
 	set_canopy_position(CANOPY_BACK); // Set Canopy Angle
 	FwVelocitySet( &flywheel, RPM_BACK, start_drive ); // Start Launcher
 
-	wait1Msec(1000);
+	wait1Msec(2500);
+	next_auto_shoot_time = nSysTime + 1500;
+
 	auto_shoot_mode = 1;
-
-
-
 
 }
 
