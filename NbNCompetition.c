@@ -558,7 +558,8 @@ task trigger_management()
 			// Ball is loaded, check to see if shooting requested
 			if ((shoot_request == 1 || (auto_shoot_mode == 1 && nSysTime >= next_auto_shoot_time))
 				&& (fr1 = (abs(wheelSpeedError(&flywheel)) <= FLYWHEEL_MAX_RPM_DELTA)) && (fr2 = (change_in_speed <= CHANGE_DELTA))) {
-			   if (auto_shoot_mode) next_auto_shoot_time = nSysTime + 2500;
+			   if (auto_shoot_mode) next_auto_shoot_time = nSysTime + 3000;
+			   //if (auto_shoot_mode) next_auto_shoot_time = nSysTime + 1800;
 
 			// Move trigger up to shoot
 
@@ -738,14 +739,15 @@ task autonomous()
 	// Start the shooting task
 	startTask( CanopyTriggerPID );
 	startTask( trigger_management );
+  FwVelocitySet( &flywheel, RPM_BACK, start_drive ); // Start Launcher
 
-	wait1Msec(1500);
+	wait1Msec(2500);
 
   autoload_mode = 1;
 	set_canopy_position(CANOPY_BACK); // Set Canopy Angle
-	FwVelocitySet( &flywheel, RPM_BACK, start_drive ); // Start Launcher
 
-	wait1Msec(2500);
+
+	wait1Msec(1500);
 	next_auto_shoot_time = nSysTime + 1000;
 
 	auto_shoot_mode = 1;
