@@ -37,18 +37,18 @@
 
 #define BUTTON_DEBOUNCE_TIME 100 // milliseconds
 
-#define CANOPY_INCREMENT 10
+#define CANOPY_INCREMENT 5
 
 #define NUM_PRESETS 3
 
-#define CANOPY_FRONT -122
-#define RPM_FRONT 1675.0
+#define CANOPY_FRONT -95
+#define RPM_FRONT 1825.0
 
-#define CANOPY_MIDDLE -20
-#define RPM_MIDDLE 2075  // was 2150
+#define CANOPY_MIDDLE -30
+#define RPM_MIDDLE 2150  // was 2150
 
-#define CANOPY_BACK -30
-#define RPM_BACK 2450
+#define CANOPY_BACK -20
+#define RPM_BACK 2525
 
 #define CHANGE_DELTA 25
 
@@ -313,7 +313,7 @@ FwControlTask()
 
 	// Set the gain
 	// fw->gain = 0.000055;
-	fw->gain = 0.001;
+	fw->gain = 0.0008;
 
 	// We are using Speed geared motors
 	// Set the encoder ticks per revolution
@@ -495,6 +495,10 @@ int trigger_set_and_check(int trigger_request) {
 	case TRIGGER_REQ_SHOOT:
 
 		updated_trigger_position_desired = nMotorEncoder[Canopy_motor] + TRIGGER_SHOOTING_MIN_DIST_FROM_CANOPY;
+		// 11/19/2015 Change to make trigger move more if angle is < -75
+		if (PIDs[PID_CANOPY].desired_position < -75) {
+		  updated_trigger_position_desired += 50;
+	  }
 		trigger_position_actual = nMotorEncoder[Trigger_motor];
 		if (trigger_position_actual >= updated_trigger_position_desired) {
 			// We've already reached our desired value
@@ -554,7 +558,7 @@ task trigger_management()
 			// Ball is loaded, check to see if shooting requested
 			if ((shoot_request == 1 || (auto_shoot_mode == 1 && nSysTime >= next_auto_shoot_time))
 				&& (fr1 = (abs(wheelSpeedError(&flywheel)) <= FLYWHEEL_MAX_RPM_DELTA)) && (fr2 = (change_in_speed <= CHANGE_DELTA))) {
-			   if (auto_shoot_mode) next_auto_shoot_time = nSysTime + 2000;
+			   if (auto_shoot_mode) next_auto_shoot_time = nSysTime + 2500;
 
 			// Move trigger up to shoot
 
@@ -735,14 +739,14 @@ task autonomous()
 	startTask( CanopyTriggerPID );
 	startTask( trigger_management );
 
-	wait1Msec(1000);
+	wait1Msec(1500);
 
   autoload_mode = 1;
 	set_canopy_position(CANOPY_BACK); // Set Canopy Angle
 	FwVelocitySet( &flywheel, RPM_BACK, start_drive ); // Start Launcher
 
 	wait1Msec(2500);
-	next_auto_shoot_time = nSysTime + 1500;
+	next_auto_shoot_time = nSysTime + 1000;
 
 	auto_shoot_mode = 1;
 
@@ -810,7 +814,7 @@ task usercontrol()
 		if (vexRT[Btn7U] == 1) {
 			turn_scale_factor = 0.3;
 			} else {
-			turn_scale_factor = 0.85;
+			turn_scale_factor = 1.0;
 		}
 
 		ldrive = vexRT[Ch2] + vexRT[Ch1] * turn_scale_factor;
