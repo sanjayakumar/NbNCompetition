@@ -41,14 +41,14 @@
 
 #define NUM_PRESETS 3
 
-#define CANOPY_FRONT -95
-#define RPM_FRONT 1825.0
+#define CANOPY_FRONT -100
+#define RPM_FRONT 1850.0
 
-#define CANOPY_MIDDLE -30
-#define RPM_MIDDLE 2150  // was 2150
+#define CANOPY_MIDDLE 0
+#define RPM_MIDDLE 2225  // was 2150
 
-#define CANOPY_BACK -20
-#define RPM_BACK 2525
+#define CANOPY_BACK 0
+#define RPM_BACK 2600
 
 #define CHANGE_DELTA 25
 
@@ -313,7 +313,10 @@ FwControlTask()
 
 	// Set the gain
 	// fw->gain = 0.000055;
-	fw->gain = 0.0008;
+	// fw->gain = 0.0008;
+	// Setting the gain back down to a lower value. SS 11/28
+
+	fw->gain = 0.0002;
 
 	// We are using Speed geared motors
 	// Set the encoder ticks per revolution
@@ -382,8 +385,8 @@ void assignPresets()
 #define TRIGGER_STATE_WAITING 3
 #define TRIGGER_STATE_BLOCKING 4
 
-#define TRIGGER_LOADING_MIN_DIST_FROM_CANOPY 160 // Canopy value + 160 is the load position
-#define TRIGGER_SHOOTING_MIN_DIST_FROM_CANOPY 320 // Canopy value + 320 is the trigger position
+#define TRIGGER_LOADING_MIN_DIST_FROM_CANOPY 135 // Canopy value + 160 is the load position
+#define TRIGGER_SHOOTING_MIN_DIST_FROM_CANOPY 295 // Canopy value + 320 is the trigger position
 
 #define BLOCKING_MODE_CANOPY_POSITION CANOPY_POSITION_MAX
 #define BLOCKING_MODE_TRIGGER_POSITION 150
@@ -406,9 +409,9 @@ int shoot_request = 0;
 int trigger_position_desired = 0;
 unsigned int next_auto_shoot_time;
 
-float Trigger_Kp = 1.2;
-float Trigger_Kd = 0.5;
-float Trigger_Ki = 0.1;
+float Trigger_Kp = 1.8;
+float Trigger_Kd = 2;
+float Trigger_Ki = 0.2;
 
 void zero_position_set() {
 	motor[Trigger_motor] = -45;
@@ -559,7 +562,7 @@ task trigger_management()
 			if ((shoot_request == 1 || (auto_shoot_mode == 1 && nSysTime >= next_auto_shoot_time))
 				&& (fr1 = (abs(wheelSpeedError(&flywheel)) <= FLYWHEEL_MAX_RPM_DELTA)) && (fr2 = (change_in_speed <= CHANGE_DELTA))) {
 			   if (auto_shoot_mode) next_auto_shoot_time = nSysTime + 3000;
-			   //if (auto_shoot_mode) next_auto_shoot_time = nSysTime + 1800;
+			//   if (auto_shoot_mode) next_auto_shoot_time = nSysTime + 1800;
 
 			// Move trigger up to shoot
 
