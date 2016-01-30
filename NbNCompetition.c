@@ -33,7 +33,9 @@
 #define FLYWHEEL_MAX_SPEED 2900
 #define FLYWHEEL_MIN_SPEED 1000
 #define FLYWHEEL_INIT_SPEED 2200
-#define FLYWHEEL_MAX_RPM_DELTA 25
+#define FLYWHEEL_MAX_RPM_DELTA 75       //can shoot if actual RPM within this many units of set RPM
+
+#define FLYWHEEL_MAX_Ki_CONTRIBUTION 0.3 // Maximum amount of contribution from Ki for launcher (between 0 and 1)
 
 #define BUTTON_DEBOUNCE_TIME 100 // milliseconds
 
@@ -41,23 +43,18 @@
 
 #define CANOPY_FRONT -95
 #define RPM_FRONT 1800
-#define RPM_Kp_FRONT 0.002
-#define RPM_Kd_FRONT 0.001
 
 #define CANOPY_MIDDLE -25
 #define RPM_MIDDLE 2150  // was 2150
-#define RPM_Kp_MIDDLE 0.002
-#define RPM_Kd_MIDDLE 0.001 // was 0.00005
 
 #define CANOPY_BACK 0
-#define RPM_BACK 2500 // was 2500
-#define RPM_Kp_BACK 0.002 // was 0.00005
-#define RPM_Kd_BACK 0.001 // was 0.00035
+#define RPM_BACK 2475 // was 2500
 
 #define CHANGE_DELTA 25
 
-float RPM_Kp = RPM_Kp_BACK;
-float RPM_Kd = RPM_Kd_BACK;
+#define RPM_Kp 0.003
+#define RPM_Kd 0.0015 //was 0.0015
+#define RPM_Ki 0.00005
 
 int trigger_servo_value = 0;
 
@@ -328,12 +325,6 @@ FwControlUpdateVelocityPID( fw_controller *fw )
 	// current is measured velocity
 	fw->error = fw->target - fw->current;
 
-	float RPM_Ki;
-
-	//RPM_Kp = 0.00005; // For middle 0.0002; for Back 0.0001; For Front 0.0005
-	//RPM_Kd = 0.00025;  //  0.0025 makes it a little unstable; back, middle is 0.002; front is 0.0013
-	RPM_Ki = 0.00004;
-
 	error_derivative = fw->error - fw->error_previous;
 	fw->error_previous = fw->error;
 	fw->error_integral = fw->error_integral + fw->error;
@@ -341,8 +332,8 @@ FwControlUpdateVelocityPID( fw_controller *fw )
 	// kludge to limit Integral term
 	float Ki_term;
 	Ki_term = fw->error_integral*RPM_Ki;
-	if (abs(fw->error_integral*RPM_Ki) > 0.3) {
-		fw->error_integral = sgn(fw->error_integral) * 0.3/RPM_Ki;
+	if (abs(fw->error_integral*RPM_Ki) > FLYWHEEL_MAX_Ki_CONTRIBUTION) {
+		fw->error_integral = sgn(fw->error_integral) * FLYWHEEL_MAX_Ki_CONTRIBUTION/RPM_Ki;
 	}
 
 	// Use Kp as gain
@@ -350,9 +341,11 @@ FwControlUpdateVelocityPID( fw_controller *fw )
 
 	rpm_loop_count++;
 
+#ifdef DEBUG_RPM_PID
 	if (rpm_loop_count % 40 == 0) {
 		writeDebugStreamLine("Error: %f Drive: %f P: %f D: %f", fw->error, fw->drive, fw->error*RPM_Kp, error_derivative*RPM_Kd);
 	}
+#endif // DEBUG_RPM_PID
 
 	if (fw->drive < 0) {
 		fw->drive = 0;
@@ -410,11 +403,11 @@ FwControlTask()
 		if( fw->motor_drive < 0 ) fw->motor_drive = 0;
 
 		// Code to limit delta
-		if(abs(fw->motor_drive - fw->previous_motor_drive) > 2){
+		if(abs(fw->motor_drive - fw->previous_motor_drive) > 3){
 			if (fw->motor_drive > fw->previous_motor_drive) {
-				fw->motor_drive = fw->previous_motor_drive + 2;
-			} else {
-			  fw->motor_drive = fw->previous_motor_drive - 2;
+				fw->motor_drive = fw->previous_motor_drive + 3;
+				} else {
+				fw->motor_drive = fw->previous_motor_drive - 3;
 			}
 		}
 
@@ -447,7 +440,7 @@ int wheelSpeedError(fw_controller *fw)
 #define TRIGGER_STATE_WAITING 4
 
 #define TRIGGER_LOADING_MIN_DIST_FROM_CANOPY 160 // Canopy value + 160 is the load position
-#define TRIGGER_SHOOTING_MIN_DIST_FROM_CANOPY 320 // Canopy value + 320 is the trigger position
+#define TRIGGER_SHOOTING_MIN_DIST_FROM_CANOPY 295 // Canopy value + 320 is the trigger position
 
 #define BLOCKING_MODE_CANOPY_POSITION CANOPY_POSITION_MAX
 #define BLOCKING_MODE_TRIGGER_POSITION 150
@@ -455,6 +448,8 @@ int wheelSpeedError(fw_controller *fw)
 #define TRIGGER_TIMEOUT 750
 
 #define TRIGGER_LOADING_OPTIMAL_VALUE 50
+
+#define TRIGGER_TIME_RUN_BALL_PICKER_BACWARDS_WHILE_SHOOTING 250 // in ms how long to run backwards to prevent ball interference
 
 int shoot_request = 0;
 
@@ -602,27 +597,21 @@ task trigger_management()
 	int shoot_time_out_enabled = 0;
 	unsigned int shoot_cancel_time = 0;
 	int trigger_task_loop_time = 25; // ms
-	int fr1, fr2;
 
 	int current_trigger_state = TRIGGER_STATE_WAITING;
 	unsigned int trigger_timeout_time;
 	unsigned int shooting_run_loader_backwards_timeout_time;
-	int change_in_speed;
-	int current_wheel_speed_error = wheelSpeedError(&flywheel);
-	int previous_wheel_speed_error;
+	int fr1;
 
 	while(1)
 	{
 		switch(current_trigger_state) {
 		case TRIGGER_STATE_READY:
-			change_in_speed = abs(previous_wheel_speed_error - current_wheel_speed_error);
-			previous_wheel_speed_error = current_wheel_speed_error;
 
 			fr1 = 1; // shot failed-to-shoot reason 1
-			fr2 = 1; // shot failed-to-shoot reason 2
 			// Ball is loaded, check to see if shooting requested
 			if ((shoot_request == 1 || (auto_shoot_mode == 1 && nSysTime >= next_auto_shoot_time))
-				&& (fr1 = (abs(wheelSpeedError(&flywheel)) <= FLYWHEEL_MAX_RPM_DELTA)) && (fr2 = (change_in_speed <= CHANGE_DELTA))) {
+				&& (fr1 = (abs(wheelSpeedError(&flywheel)) <= FLYWHEEL_MAX_RPM_DELTA))) {
 				if (auto_shoot_mode) next_auto_shoot_time = nSysTime + 1500;
 
 				// Move trigger up to shoot
@@ -631,27 +620,20 @@ task trigger_management()
 				motor[BallPicker] = -127;
 				current_trigger_state = TRIGGER_STATE_SHOOT_BACKOFF;
 				trigger_timeout_time = nSysTime + TRIGGER_TIMEOUT;
-				shooting_run_loader_backwards_timeout_time = nSysTime + 250;
+				shooting_run_loader_backwards_timeout_time = nSysTime + TRIGGER_TIME_RUN_BALL_PICKER_BACWARDS_WHILE_SHOOTING;
 				trigger_set_and_check(TRIGGER_REQ_RELOAD);
 			}
 			else {
 				trigger_set_and_check(TRIGGER_REQ_RELOAD);
 
-				/*
+
 				// DEBUG START
 				if (shoot_request) {
-				if (!fr1) {
-				writeDebugStreamLine("Didn't shoot due to RPM; Error: %f", wheelSpeedError(&flywheel));
-				}
-				if (!fr2) {
-				writeDebugStreamLine("Didn't shoot due to change in speed");
-				}
-				if (fr1 && fr2) {
-				writeDebugStreamLine("Didn't shoot for unknown reason");
-				}
+					if (!fr1) {
+						writeDebugStreamLine("Didn't shoot due to RPM; Error: %f", wheelSpeedError(&flywheel));
+					}
 				}
 				// DEBUG END
-				*/
 			}
 
 			break;
@@ -885,11 +867,21 @@ task usercontrol()
 		if (vexRT[Btn7U] == 1) {
 			turn_scale_factor = 0.3;
 			} else {
-			turn_scale_factor = 1.0;
+			turn_scale_factor = 0.6;
 		}
 
+		//Normal mode that Aria likes
 		ldrive = vexRT[Ch2] + vexRT[Ch1] * turn_scale_factor;
 		rdrive = vexRT[Ch2] - vexRT[Ch1] * turn_scale_factor;
+
+		// Straight or turn only experiment for Akshaya
+		/*if (abs(vexRT[Ch1]) > abs(vexRT[Ch2])) {
+			ldrive = vexRT[Ch1]*turn_scale_factor;
+			rdrive = - vexRT[Ch2]*turn_scale_factor;
+		} else {
+			ldrive = vexRT[Ch2];
+		  rdrive = vexRT[Ch2];
+		} */
 
 		if (abs(ldrive) > 127) { // Scale left and right appropriately if exceeds max
 			float temp = 127.0/abs(ldrive);
@@ -967,22 +959,16 @@ task usercontrol()
 			set_canopy_position(CANOPY_BACK);
 			FwVelocitySet( &flywheel, RPM_BACK, start_drive );
 			launcher_flywheel_running = 1;
-			RPM_Kp = RPM_Kp_BACK;
-			RPM_Kd = RPM_Kd_BACK;
 		}
 		else if (vexRT[Btn8RXmtr2]) {
 			set_canopy_position(CANOPY_MIDDLE);
 			FwVelocitySet( &flywheel, RPM_MIDDLE, start_drive );
 			launcher_flywheel_running = 1;
-			RPM_Kp = RPM_Kp_MIDDLE;
-			RPM_Kd = RPM_Kd_MIDDLE;
 		}
 		else if (vexRT[Btn8DXmtr2]) {
 			set_canopy_position(CANOPY_FRONT);
 			FwVelocitySet( &flywheel, RPM_FRONT, start_drive );
 			launcher_flywheel_running = 1;
-			RPM_Kp = RPM_Kp_FRONT;
-			RPM_Kd = RPM_Kd_FRONT;
 		}
 		else if (vexRT[Btn5UXmtr2]) {
 			set_canopy_position(last_canopy_angle);
