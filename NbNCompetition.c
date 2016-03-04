@@ -1,13 +1,14 @@
 #pragma config(I2C_Usage, I2C1, i2cSensors)
+#pragma config(Sensor, in1,    AutoProgram,    sensorPotentiometer)
 #pragma config(Sensor, dgtl1,  BallInTrigger,  sensorTouch)
 #pragma config(Sensor, dgtl2,  Overflow,       sensorTouch)
 #pragma config(Sensor, dgtl3,  LCDin,          sensorDigitalIn)
 #pragma config(Sensor, dgtl4,  LCDout,         sensorDigitalOut)
 #pragma config(Sensor, dgtl8,  LiftTop,        sensorTouch)
 #pragma config(Sensor, dgtl9,  LiftBottom,     sensorTouch)
-#pragma config(Sensor, I2C_1,  TriggerAngleIME, sensorQuadEncoderOnI2CPort,    , AutoAssign)
-#pragma config(Sensor, I2C_2,  FlywheelSpeedIME, sensorQuadEncoderOnI2CPort,    , AutoAssign)
-#pragma config(Sensor, I2C_3,  CanopyAngleIME, sensorQuadEncoderOnI2CPort,    , AutoAssign)
+#pragma config(Sensor, I2C_1,  TriggerAngleIME, sensorQuadEncoderOnI2CPort,    , AutoAssign )
+#pragma config(Sensor, I2C_2,  FlywheelSpeedIME, sensorQuadEncoderOnI2CPort,    , AutoAssign )
+#pragma config(Sensor, I2C_3,  CanopyAngleIME, sensorQuadEncoderOnI2CPort,    , AutoAssign )
 #pragma config(Motor,  port1,           Lift1,         tmotorVex393_HBridge, openLoop)
 #pragma config(Motor,  port2,           Drive_L,       tmotorVex393_MC29, openLoop, reversed)
 #pragma config(Motor,  port3,           Drive_R,       tmotorVex393_MC29, openLoop)
@@ -33,7 +34,7 @@
 #define FLYWHEEL_MAX_SPEED 2900
 #define FLYWHEEL_MIN_SPEED 1000
 #define FLYWHEEL_INIT_SPEED 2200
-#define FLYWHEEL_MAX_RPM_DELTA 75       //can shoot if actual RPM within this many units of set RPM
+#define FLYWHEEL_MAX_RPM_DELTA 50       //can shoot if actual RPM within this many units of set RPM
 
 #define FLYWHEEL_MAX_Ki_CONTRIBUTION 0.3 // Maximum amount of contribution from Ki for launcher (between 0 and 1)
 
@@ -41,22 +42,20 @@
 
 #define CANOPY_INCREMENT 5
 
-#define CANOPY_FRONT -95
+#define CANOPY_FRONT -80
 #define RPM_FRONT 1800
 
-#define CANOPY_MIDDLE -25
-#define RPM_MIDDLE 2150  // was 2150
+#define CANOPY_MIDDLE 0
+#define RPM_MIDDLE 2075  // was 2125
 
 #define CANOPY_BACK 0
-#define RPM_BACK 2475 // was 2500
+#define RPM_BACK 2440 // was 2500
 
 #define CHANGE_DELTA 25
 
-#define RPM_Kp 0.003
+#define RPM_Kp 0.0035
 #define RPM_Kd 0.0015 //was 0.0015
 #define RPM_Ki 0.00005
-
-int trigger_servo_value = 0;
 
 #define WAITING_SHOOT_TIME_OUT	1000
 
@@ -440,10 +439,7 @@ int wheelSpeedError(fw_controller *fw)
 #define TRIGGER_STATE_WAITING 4
 
 #define TRIGGER_LOADING_MIN_DIST_FROM_CANOPY 160 // Canopy value + 160 is the load position
-#define TRIGGER_SHOOTING_MIN_DIST_FROM_CANOPY 295 // Canopy value + 320 is the trigger position
-
-#define BLOCKING_MODE_CANOPY_POSITION CANOPY_POSITION_MAX
-#define BLOCKING_MODE_TRIGGER_POSITION 150
+#define TRIGGER_SHOOTING_MIN_DIST_FROM_CANOPY 315 // was 305 Canopy value + 320 is the trigger position
 
 #define TRIGGER_TIMEOUT 750
 
@@ -465,21 +461,48 @@ int shoot_request = 0;
 int trigger_position_desired = 0;
 unsigned int next_auto_shoot_time;
 
+int number_auto_balls_shot = 0;
+
 float Trigger_Kp = 1.2; // was 1.8
 
 float Trigger_Kd = 2;
 float Trigger_Ki = 0.2;
 
 void zero_position_set() {
-	motor[Trigger_motor] = -45;
-	motor[Canopy_motor] = +25;
-	wait1Msec(500);
-	motor[Trigger_motor] = 0;
-	motor[Canopy_motor] = 0;
-	wait1Msec(500);
+	int new_trigger_encoder_value, new_canopy_encoder_value;
+	int old_trigger_encoder_value = nMotorEncoder[Trigger_motor];
+	int old_canopy_encoder_value = nMotorEncoder[Canopy_motor];
+	int canopy_not_done = 1;
+	int trigger_not_done = 1;
 
-	nMotorEncoder[Trigger_motor] = 0;
-	nMotorEncoder[Canopy_motor] = 0;
+	// Start Trigger and Canopy moving towards their start values
+	motor[Trigger_motor] = -35;
+	motor[Canopy_motor] = +35;
+
+	while (canopy_not_done || trigger_not_done) {
+		wait1Msec(100); // wait in beginning since we just read the IME value and need time for it to change if it isn't at initial pos.
+		if (trigger_not_done) {
+			new_trigger_encoder_value = nMotorEncoder[Trigger_motor];
+			if ((new_trigger_encoder_value - old_trigger_encoder_value) == 0) { // If value hasn't changed then we're done
+				motor[Trigger_motor] = 0;
+				trigger_not_done = 0;
+				} else {
+				old_trigger_encoder_value = new_trigger_encoder_value;
+			}
+		}
+		if (canopy_not_done) {
+			new_canopy_encoder_value = nMotorEncoder[Canopy_motor];
+			if ((new_canopy_encoder_value - old_canopy_encoder_value) == 0) {
+				motor[Canopy_motor] = 0;
+				canopy_not_done = 0;
+				} else {
+				old_canopy_encoder_value = new_canopy_encoder_value;
+			}
+		}
+	}
+	wait1Msec(200);
+	nMotorEncoder[Trigger_motor] = 0; // Set new zero Trigger position
+	nMotorEncoder[Canopy_motor] = 0; // Set new zero Canopy position
 
 }
 
@@ -545,10 +568,13 @@ void set_trigger_position(int target) {
 	PIDs[PID_TRIGGER].desired_position = target;
 }
 
+int updated_trigger_position_desired;
+int trigger_position_actual;
+
 // This function sets the trigger position (shoot or reload) and checks to see if that position has been reached
 int trigger_set_and_check(int trigger_request) {
-	int trigger_position_actual;
-	int updated_trigger_position_desired;
+	//int trigger_position_actual;
+	//int updated_trigger_position_desired;
 	int retval = 0; // return value
 
 	switch (trigger_request) {
@@ -556,7 +582,7 @@ int trigger_set_and_check(int trigger_request) {
 
 		updated_trigger_position_desired = nMotorEncoder[Canopy_motor] + TRIGGER_SHOOTING_MIN_DIST_FROM_CANOPY;
 		// 11/19/2015 Change to make trigger move more if angle is < -75
-		if (PIDs[PID_CANOPY].desired_position < -75) {
+		if (PIDs[PID_CANOPY].desired_position < -65) {
 			updated_trigger_position_desired += 50;
 		}
 		trigger_position_actual = nMotorEncoder[Trigger_motor];
@@ -612,7 +638,9 @@ task trigger_management()
 			// Ball is loaded, check to see if shooting requested
 			if ((shoot_request == 1 || (auto_shoot_mode == 1 && nSysTime >= next_auto_shoot_time))
 				&& (fr1 = (abs(wheelSpeedError(&flywheel)) <= FLYWHEEL_MAX_RPM_DELTA))) {
-				if (auto_shoot_mode) next_auto_shoot_time = nSysTime + 1500;
+				if (auto_shoot_mode) {
+					next_auto_shoot_time = nSysTime /*+ 1500*/;
+				}
 
 				// Move trigger up to shoot
 
@@ -625,18 +653,19 @@ task trigger_management()
 			}
 			else {
 				trigger_set_and_check(TRIGGER_REQ_RELOAD);
-
-
 				// DEBUG START
 				if (shoot_request) {
 					if (!fr1) {
 						writeDebugStreamLine("Didn't shoot due to RPM; Error: %f", wheelSpeedError(&flywheel));
 					}
+					else {
+						writeDebugStreamLine("Didn't shoot due to unknown reason");
+					}
 				}
 				// DEBUG END
 			}
-
 			break;
+
 		case TRIGGER_STATE_SHOOT_BACKOFF:
 			if (nSysTime > shooting_run_loader_backwards_timeout_time) {
 				motor[BallPicker] = 0;
@@ -661,10 +690,15 @@ task trigger_management()
 					// DEBUG START
 					writeDebugStreamLine("RPM: %d", flywheel.v_current);
 					// DEBUG END
+					if (auto_shoot_mode) {
+						number_auto_balls_shot++;
+					}
 				}
 				current_trigger_state = TRIGGER_STATE_RELOADING;
 				trigger_set_and_check(TRIGGER_REQ_RELOAD);
 				disable_ball_picker = 0;
+
+
 			}
 			break;
 		case TRIGGER_STATE_RELOADING:
@@ -771,6 +805,14 @@ void pre_auton()
 	feeder_state = 0; // 0 is off, 1 is on
 	feeder_direction = 1; // 1 is pick-up-balls, -1 is drop balls
 	autoload_mode = 0;
+
+	// Gyro Initialization
+	//Completely clear out any previous sensor readings by setting the port to "sensorNone"
+	SensorType[in2] = sensorNone;
+	wait1Msec(1000);
+	//Reconfigure Analog Port 8 as a Gyro sensor and allow time for ROBOTC to calibrate it
+	SensorType[in2] = sensorGyro;
+	wait1Msec(2000);
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -782,8 +824,64 @@ void pre_auton()
 //
 /////////////////////////////////////////////////////////////////////////////////////////
 
+#define STRAIGHT 0
+#define LEFT 1
+#define RIGHT 2
+
+void auto_drive(int direction, int speed, int time) {
+	switch(direction) {
+	case STRAIGHT:
+		motor[Drive_L] = speed;
+		motor[Drive_R] = speed;
+		break;
+	case LEFT:
+		motor[Drive_L] = -speed;
+		motor[Drive_R] = speed;
+		break;
+	case RIGHT:
+		motor[Drive_R] = -speed;
+		motor[Drive_L] = speed;
+		break;
+	}
+	wait1Msec(time);
+	motor[Drive_R] = 0;
+	motor[Drive_L] = 0;
+}
+
+void gyro_turn(int angle_delta, int speed){
+	int current_angle;
+	int target_angle;
+
+	// angle_delta positive value means CounterClockwise
+	//             negative value means Clockwise
+
+
+
+	current_angle = SensorValue[in2];
+	target_angle = abs(current_angle + angle_delta);
+	if(angle_delta > 0){
+		motor[Drive_L] = -speed;
+		motor[Drive_R] = speed;
+		} else {
+		motor[Drive_R] = -speed;
+		motor[Drive_L] = speed;
+	}
+	while (1)
+	{
+		current_angle = abs(SensorValue[in2]);
+		if (current_angle >= target_angle) {
+			break;
+		}
+		wait1Msec(25);
+	}
+	motor[Drive_R] = 0;
+	motor[Drive_L] = 0;
+}
+
 task autonomous()
 {
+	int autonomous_program;
+
 	// Start the flywheel control task
 	startTask( FwControlTask );
 
@@ -792,17 +890,48 @@ task autonomous()
 	startTask( trigger_management );
 	FwVelocitySet( &flywheel, RPM_BACK, start_drive ); // Start Launcher
 
-	wait1Msec(2525);
 
 	autoload_mode = 1;
 	set_canopy_position(CANOPY_BACK); // Set Canopy Angle
 
 
-	wait1Msec(1500);
-	next_auto_shoot_time = nSysTime + 1000;
+	// wait1Msec(1500);
+	next_auto_shoot_time = nSysTime /*+ 1000*/;
 
 	auto_shoot_mode = 1;
 
+
+	while (1) {
+		if (number_auto_balls_shot >= 4) {
+			break;
+		}
+		wait1Msec(25);
+	}
+
+	// Reset count
+	number_auto_balls_shot = 0;
+	auto_shoot_mode = 0;
+
+	if (SensorValue[AutoProgram] < 1000) {
+		autonomous_program = 1;
+		} else if (SensorValue[AutoProgram] > 3000) {
+		autonomous_program = 2;
+		} else {
+		autonomous_program = 0;
+	}
+
+	switch (autonomous_program) {
+	case 1: // Red Squares
+		auto_drive(STRAIGHT, 127, 800);
+		gyro_turn(-115, 45); // -ve value is clockwise
+		auto_drive(STRAIGHT, 64, 3300);
+		break;
+	case 2: // Blue Squares
+		auto_drive(STRAIGHT, 127, 800);
+		gyro_turn(155, 45); // +ve value is counterclockwise
+		auto_drive(STRAIGHT, 64, 3300);
+		break;
+	}
 }
 
 /////////////////////////////////////////////////////////////////////////////////////////
@@ -867,7 +996,7 @@ task usercontrol()
 		if (vexRT[Btn7U] == 1) {
 			turn_scale_factor = 0.3;
 			} else {
-			turn_scale_factor = 0.6;
+			turn_scale_factor = 1;
 		}
 
 		//Normal mode that Aria likes
@@ -876,11 +1005,11 @@ task usercontrol()
 
 		// Straight or turn only experiment for Akshaya
 		/*if (abs(vexRT[Ch1]) > abs(vexRT[Ch2])) {
-			ldrive = vexRT[Ch1]*turn_scale_factor;
-			rdrive = - vexRT[Ch2]*turn_scale_factor;
+		ldrive = vexRT[Ch1]*turn_scale_factor;
+		rdrive = - vexRT[Ch2]*turn_scale_factor;
 		} else {
-			ldrive = vexRT[Ch2];
-		  rdrive = vexRT[Ch2];
+		ldrive = vexRT[Ch2];
+		rdrive = vexRT[Ch2];
 		} */
 
 		if (abs(ldrive) > 127) { // Scale left and right appropriately if exceeds max
